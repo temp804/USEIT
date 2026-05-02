@@ -199,28 +199,12 @@ def get_platform(url: str):
         return 'youtube'
     elif 'twitter.com' in url_lower or 'x.com' in url_lower:
         return 'twitter'
-    elif 'x.com' in url_lower:
-        return 'x'
     elif 'facebook.com' in url_lower or 'fb.com' in url_lower:
         return 'facebook'
     elif 'instagram.com' in url_lower:
         return 'instagram'
     elif 'tiktok.com' in url_lower:
         return 'tiktok'
-    elif 'reddit.com' in url_lower:
-        return 'reddit'
-    elif 'damplips.com' in url_lower:
-        return 'damplips'
-    elif 'pornhat.one' in url_lower or 'pornhat' in url_lower:
-        return 'pornhat'
-    elif 'terabox.com' in url_lower or 'teraboxapp.com' in url_lower or '1024tera.com' in url_lower:
-        return 'terabox'
-    elif 'vimeo.com' in url_lower:
-        return 'vimeo'
-    elif 'dailymotion.com' in url_lower or 'dai.ly' in url_lower:
-        return 'dailymotion'
-    elif 'twitch.tv' in url_lower:
-        return 'twitch'
     else:
         return 'generic'
 
