@@ -260,14 +260,6 @@ def build_headers(video_url: str, referer: str = None, platform: str = 'generic'
         headers.update({
             "X-Requested-With": "XMLHttpRequest",
         })
-    elif platform == 'damplips' or platform == 'pornhat':
-        headers.update({
-            "Referer": referer,
-            "Origin": domain,
-            "Sec-Fetch-Dest": "video",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-site",
-        })
     else:
         headers.update({
             "Referer": referer,
