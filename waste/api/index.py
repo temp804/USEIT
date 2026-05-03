@@ -1,5 +1,5 @@
 """
-Vercel ASGI Handler - Entry point for @vercel/python runtime
+Vercel ASGI Handler - Entry point for Vercel's Python runtime
 """
 import sys
 from pathlib import Path
@@ -7,8 +7,9 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import and export the FastAPI app
+# Import the FastAPI app
 from main import app
 
-# That's it - Vercel's @vercel/python will use this 'app' as the ASGI application
+# CRITICAL: Export as handler for Vercel Python runtime
+handler = app
 
