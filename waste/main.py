@@ -5,19 +5,19 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import os
-from urllib.parse import urlparse, urlunparse, quote, unquote
+from urllib.parse import urlparse, quote, unquote
 import time
 import re
 import logging
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 import urllib3
-import json
+# import 
 import uuid
 import secrets
-import hashlib
+# import
 from datetime import datetime, timedelta
-from pathlib import Path
-import base64
+# from pathlib import Path
+# import base64
 
 # Optional: Try to import browser_cookie3 (not available on serverless)
 # try:
