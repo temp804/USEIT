@@ -20,11 +20,11 @@ from pathlib import Path
 import base64
 
 # Optional: Try to import browser_cookie3 (not available on serverless)
-try:
-    import browser_cookie3
-    HAS_BROWSER_COOKIES = True
-except ImportError:
-    HAS_BROWSER_COOKIES = False
+# try:
+#     import browser_cookie3
+#     HAS_BROWSER_COOKIES = True
+# except ImportError:
+#     HAS_BROWSER_COOKIES = False
 
 # Disable SSL warnings if needed
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -493,15 +493,15 @@ def get_terabox_download_link(url: str) -> Optional[str]:
         logger.error(f"Terabox download link error: {str(e)}")
         return None
 
-def get_cookie_header():
-    if not HAS_BROWSER_COOKIES:
-        return None
-    try:
-        cj = browser_cookie3.chrome()
-        return cj
-    except Exception as e:
-        logger.warning(f"Could not get cookies: {e}")
-        return None
+# def get_cookie_header():
+#     if not HAS_BROWSER_COOKIES:
+#         return None
+#     try:
+#         cj = browser_cookie3.chrome()
+#         return cj
+#     except Exception as e:
+#         logger.warning(f"Could not get cookies: {e}")
+#         return None
 
 # ------------------ EXTRACT WITH yt-dlp (BEST METHOD) ------------------
 
