@@ -4,7 +4,6 @@ import yt_dlp
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-import browser_cookie3
 import os
 from urllib.parse import urlparse, urlunparse, quote, unquote
 import time
@@ -20,6 +19,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import base64
 
+# Optional: Try to import browser_cookie3 (not available on serverless)
+try:
+    import browser_cookie3
+    HAS_BROWSER_COOKIES = True
+except ImportError:
+    HAS_BROWSER_COOKIES = False
+
 # Disable SSL warnings if needed
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -28,6 +34,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Health check endpoint for Vercel
+@app.get("/health")
+def health_check():
+    """Health check endpoint for monitoring"""
+    return {
+        "status": "ok",
+        "service": "Universal Video Downloader",
+        "version": "1.0"
+    }
 
 CACHE = {}
 DOWNLOAD_DIR = "downloads"
@@ -117,6 +133,12 @@ def build_vpn_proxy_url():
 
 # Initialize VPN proxy
 USER_VPN_CONFIG["proxy_url"] = build_vpn_proxy_url()
+
+# Startup event for debugging and initialization
+@app.on_event("startup")
+async def startup_event():
+    logger.info("✓ Application started successfully")
+    logger.info(f"VPN enabled: {USER_VPN_CONFIG.get('enabled', False)}")
 
 # ============================================
 # ========== TOKEN SYSTEM (Unlimited) ==========
@@ -468,6 +490,8 @@ def get_terabox_download_link(url: str) -> Optional[str]:
         return None
 
 def get_cookie_header():
+    if not HAS_BROWSER_COOKIES:
+        return None
     try:
         cj = browser_cookie3.chrome()
         return cj
