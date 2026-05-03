@@ -32,7 +32,17 @@ app = FastAPI()
 CACHE = {}
 DOWNLOAD_DIR = "downloads"
 TOKEN_DATA_FILE = "token_data.json"
-os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+
+# Try to create download directory, but don't fail if it doesn't work (serverless)
+try:
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+except (OSError, PermissionError) as e:
+    logger.warning(f"Could not create {DOWNLOAD_DIR}: {str(e)}. Using /tmp instead.")
+    DOWNLOAD_DIR = "/tmp/downloads"
+    try:
+        os.makedirs(DOWNLOAD_DIR, exist_ok=True)
+    except Exception as e:
+        logger.warning(f"Could not create /tmp/downloads either: {str(e)}")
 
 # Global token storage
 TOKEN_DB: Dict[str, Dict] = {}
@@ -614,6 +624,43 @@ def download_direct(url: str, filepath: str, headers: dict, proxy: Optional[str]
     except Exception as e:
         logger.error(f"Direct download failed: {str(e)}")
         return False
+
+def stream_video_direct(url: str, headers: dict, proxy: Optional[str] = None):
+    """Stream video directly without saving to disk (for serverless/mobile)"""
+    try:
+        session = requests.Session()
+        
+        # Add retries
+        retry_strategy = Retry(
+            total=2,
+            backoff_factor=0.5,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        response = session.get(
+            url,
+            headers=headers,
+            stream=True,
+            timeout=60,
+            allow_redirects=True,
+            proxies={"http": proxy, "https": proxy} if proxy else {},
+            verify=False
+        )
+        
+        if response.status_code in [200, 206]:
+            def generate_chunks():
+                for chunk in response.iter_content(chunk_size=256 * 1024):  # 256KB chunks
+                    if chunk:
+                        yield chunk
+            
+            return generate_chunks()
+        return None
+    except Exception as e:
+        logger.error(f"Stream direct failed: {str(e)}")
+        return None
 
 # ------------------ HOME ------------------
 
@@ -1519,19 +1566,18 @@ def direct_player(url: str):
     </html>
     """
 
-# ------------------ DOWNLOAD ENDPOINT (MULTI-METHOD) ------------------
+# ------------------ DOWNLOAD ENDPOINT (STREAMING VERSION FOR MOBILE & SERVERLESS) ------------------
 
 @app.get("/download")
 def download_video(url: str, token: Optional[str] = Query(None), title: Optional[str] = Query(None), use_ytdlp: Optional[str] = Query("false")):
-    """Smart download with token validation, multi-method bypass, and automatic VPN support"""
+    """Stream video directly to browser/mobile without saving to disk (Vercel-compatible)"""
     try:
         decoded_url = unquote(url)
         decoded_token = unquote(token) if token else None
         decoded_title = unquote(title) if title else None
         platform = get_platform(decoded_url)
         
-        # Always use VPN proxy if configured (automatic, no user control needed)
-        logger.info(f"Download request - Platform: {platform}, URL: {decoded_url[:60]}... (VPN: automatic)")
+        logger.info(f"Download request - Platform: {platform}, URL: {decoded_url[:60]}... (Streaming)")
         
         # Validate token if provided
         if decoded_token:
@@ -1546,99 +1592,125 @@ def download_video(url: str, token: Optional[str] = Query(None), title: Optional
         else:
             filename = f"video_{int(time.time())}.mp4"
         
-        filepath = os.path.join(DOWNLOAD_DIR, filename)
-        
-        # Always use VPN proxy (automatic)
+        # Get proxy list
         proxy_list = get_proxy_list(use_vpn=True)
         
-        # SPECIAL HANDLING FOR TERABOX
+        # ===== SPECIAL HANDLING FOR TERABOX (Direct Link) =====
         if platform == 'terabox':
-            logger.info(f"Special Terabox handling (VPN: automatic)...")
-            # Try to get direct link first
+            logger.info("Terabox: Finding direct download link...")
             direct_link = get_terabox_download_link(decoded_url)
             if direct_link:
-                logger.info(f"Found direct Terabox link, attempting download...")
+                logger.info(f"Terabox: Found direct link, streaming...")
                 headers = build_headers(direct_link, platform='generic')
                 for proxy in proxy_list:
-                    success = download_direct(direct_link, filepath, headers, proxy)
-                    if success and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                        logger.info("✓ Downloaded Terabox video successfully via direct link")
-                        return FileResponse(
-                            filepath,
-                            filename=filename,
-                            media_type="application/octet-stream",
+                    stream = stream_video_direct(direct_link, headers, proxy)
+                    if stream:
+                        logger.info("✓ Streaming Terabox video directly")
+                        return StreamingResponse(
+                            stream,
+                            media_type="video/mp4",
                             headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
                         )
         
-        # METHOD 1: Try yt-dlp if forced or if platform is social media
-        if use_ytdlp == "true" or platform in ['youtube', 'twitter', 'facebook', 'instagram', 'tiktok', 'reddit', 'terabox', 'x']:
-            logger.info(f"Method 1: Trying yt-dlp download (VPN: automatic)...")
+        # ===== METHOD 1: Try yt-dlp for social platforms =====
+        if use_ytdlp == "true" or platform in ['youtube', 'twitter', 'facebook', 'instagram', 'tiktok', 'reddit', 'x']:
+            logger.info("Method 1: Attempting yt-dlp streaming...")
             for proxy_idx, proxy in enumerate(proxy_list):
-                success = download_with_ytdlp(decoded_url, filepath, platform, proxy)
-                if success and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                    logger.info(f"✓ Downloaded successfully with yt-dlp (VPN proxy: {proxy or 'direct'})")
-                    return FileResponse(
-                        filepath,
-                        filename=filename,
-                        media_type="application/octet-stream",
-                        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
-                    )
+                try:
+                    ydl_opts = {
+                        'format': 'best[ext=mp4]/best/best[ext=webm]',
+                        'quiet': True,
+                        'no_warnings': True,
+                        'ignoreerrors': True,
+                        'socket_timeout': 30,
+                        'http_headers': build_headers(decoded_url, platform=platform),
+                    }
+                    
+                    if proxy:
+                        ydl_opts['proxy'] = proxy
+                    
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(decoded_url, download=False)
+                        if info and info.get('url'):
+                            video_url = info['url']
+                            stream_headers = build_headers(video_url, platform=platform)
+                            stream = stream_video_direct(video_url, stream_headers, proxy)
+                            if stream:
+                                logger.info(f"✓ Streaming with yt-dlp (proxy: {proxy or 'direct'})")
+                                return StreamingResponse(
+                                    stream,
+                                    media_type="video/mp4",
+                                    headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+                                )
+                except Exception as e:
+                    logger.warning(f"yt-dlp Method 1 failed: {str(e)}")
+                    continue
         
-        # METHOD 2: Try direct download with rotating headers and proxies
-        logger.info(f"Method 2: Trying direct download with VPN proxies (VPN: automatic)...")
+        # ===== METHOD 2: Direct streaming with rotating headers =====
+        logger.info("Method 2: Attempting direct streaming...")
         for attempt, proxy in enumerate(proxy_list):
             headers = build_headers(decoded_url, platform=platform, referer=decoded_url, proxy_index=attempt)
-            success = download_direct(decoded_url, filepath, headers, proxy)
+            stream = stream_video_direct(decoded_url, headers, proxy)
             
-            if success and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                logger.info(f"✓ Downloaded successfully (VPN proxy: {proxy or 'direct'})")
-                return FileResponse(
-                    filepath,
-                    filename=filename,
-                    media_type="application/octet-stream",
+            if stream:
+                logger.info(f"✓ Streaming directly (proxy: {proxy or 'direct'})")
+                return StreamingResponse(
+                    stream,
+                    media_type="video/mp4",
                     headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
                 )
         
-        # METHOD 3: Try with different referers
+        # ===== METHOD 3: Try with different referers =====
         logger.info("Method 3: Trying with alternative referers...")
         referer_options = [decoded_url, get_domain(decoded_url), "https://google.com", "https://facebook.com"]
         for referer in referer_options:
             headers = build_headers(decoded_url, platform=platform, referer=referer)
             for proxy in proxy_list:
-                success = download_direct(decoded_url, filepath, headers, proxy)
+                stream = stream_video_direct(decoded_url, headers, proxy)
                 
-                if success and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                    logger.info(f"✓ Downloaded successfully with referer: {referer}")
-                    return FileResponse(
-                        filepath,
-                        filename=filename,
-                        media_type="application/octet-stream",
+                if stream:
+                    logger.info(f"✓ Streaming with referer: {referer}")
+                    return StreamingResponse(
+                        stream,
+                        media_type="video/mp4",
                         headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
                     )
         
-        # METHOD 4: Final attempt with yt-dlp and all proxies
-        logger.info("Method 4: Final attempt with yt-dlp and all proxies...")
+        # ===== METHOD 4: yt-dlp with all proxies (final attempt) =====
+        logger.info("Method 4: Final yt-dlp attempt with all proxies...")
         for proxy in proxy_list:
-            success = download_with_ytdlp(decoded_url, filepath, platform, proxy)
-            
-            if success and os.path.exists(filepath) and os.path.getsize(filepath) > 0:
-                logger.info(f"✓ Downloaded successfully with yt-dlp final attempt")
-                return FileResponse(
-                    filepath,
-                    filename=filename,
-                    media_type="application/octet-stream",
-                    headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
-                )
+            try:
+                ydl_opts = {
+                    'format': 'best[ext=mp4]/best/best[ext=webm]',
+                    'quiet': True,
+                    'no_warnings': True,
+                    'socket_timeout': 60,
+                }
+                
+                if proxy:
+                    ydl_opts['proxy'] = proxy
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(decoded_url, download=False)
+                    if info and info.get('url'):
+                        video_url = info['url']
+                        stream_headers = build_headers(video_url, platform=platform)
+                        stream = stream_video_direct(video_url, stream_headers, proxy)
+                        if stream:
+                            logger.info(f"✓ Streaming with yt-dlp final attempt")
+                            return StreamingResponse(
+                                stream,
+                                media_type="video/mp4",
+                                headers={"Content-Disposition": f"attachment; filename=\"{filename}\""}
+                            )
+            except Exception as e:
+                logger.warning(f"yt-dlp final attempt failed: {str(e)}")
+                continue
         
-        # Clean up empty file
-        if os.path.exists(filepath) and os.path.getsize(filepath) == 0:
-            os.remove(filepath)
-        
-        vpn_msg = " (with automatic VPN)"
-        logger.error(f"All download methods failed for: {decoded_url}{vpn_msg}")
+        logger.error(f"All streaming methods failed for: {decoded_url}")
         raise HTTPException(
             status_code=400,
-            detail=f"Download failed after all bypass methods. All requests used automatic VPN proxy. Try a different URL."
+            detail="Could not stream video. The URL may be invalid, region-restricted, or the platform may require authentication."
         )
         
     except HTTPException as e:
@@ -1747,49 +1819,67 @@ def direct_player(url: str):
 
 @app.get("/stream")
 def stream_video(url: str, request: Request):
-    """Stream video with proxy and bypass"""
+    """Stream video with proxy and bypass - Vercel-compatible"""
     try:
         decoded_url = unquote(url)
         platform = get_platform(decoded_url)
         
         range_header = request.headers.get("range")
+        proxy_list = get_proxy_list(use_vpn=True)
         
-        # Try multiple times with different headers
-        for proxy_index in range(len(PROXY_LIST)):
+        # Try with VPN proxies first
+        for proxy_index, proxy in enumerate(proxy_list):
             headers = build_headers(decoded_url, platform=platform, referer=decoded_url, proxy_index=proxy_index, incoming_range=range_header)
-            proxy = PROXY_LIST[proxy_index]
             
             try:
-                session = requests.Session()
-                proxies = {"http": proxy, "https": proxy} if proxy else {}
-                
-                response = session.get(
-                    decoded_url,
-                    headers=headers,
-                    stream=True,
-                    timeout=30,
-                    allow_redirects=True,
-                    proxies=proxies,
-                    verify=False
-                )
-                
-                if response.status_code in [200, 206]:
-                    content_type = response.headers.get("Content-Type", "video/mp4")
-                    
+                stream = stream_video_direct(decoded_url, headers, proxy)
+                if stream:
+                    logger.info(f"✓ Streaming video (proxy: {proxy or 'direct'})")
                     return StreamingResponse(
-                        response.iter_content(chunk_size=1024 * 1024),
-                        status_code=response.status_code,
+                        stream,
+                        status_code=200,
+                        media_type="video/mp4",
                         headers={
                             "Accept-Ranges": "bytes",
                             "Cache-Control": "no-cache",
-                        },
-                        media_type=content_type
+                        }
                     )
             except Exception as e:
                 logger.warning(f"Stream attempt {proxy_index + 1} failed: {str(e)}")
                 continue
         
+        # Fallback: Try yt-dlp for extraction
+        logger.info("Fallback: Attempting yt-dlp extraction for streaming...")
+        for proxy in proxy_list:
+            try:
+                ydl_opts = {
+                    'format': 'best[ext=mp4]/best',
+                    'quiet': True,
+                    'no_warnings': True,
+                }
+                
+                if proxy:
+                    ydl_opts['proxy'] = proxy
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(decoded_url, download=False)
+                    if info and info.get('url'):
+                        video_url = info['url']
+                        stream_headers = build_headers(video_url, platform=platform)
+                        stream = stream_video_direct(video_url, stream_headers, proxy)
+                        if stream:
+                            logger.info(f"✓ Streaming via yt-dlp extraction")
+                            return StreamingResponse(
+                                stream,
+                                media_type="video/mp4",
+                                headers={"Cache-Control": "no-cache"}
+                            )
+            except Exception as e:
+                logger.warning(f"yt-dlp streaming failed: {str(e)}")
+                continue
+        
         # Fallback to direct player
+        logger.warning("All streaming methods failed, redirecting to direct player")
         return RedirectResponse(url=f"/direct?url={quote(decoded_url)}")
         
     except Exception as e:
