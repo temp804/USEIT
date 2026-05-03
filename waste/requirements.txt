@@ -3,7 +3,6 @@ uvicorn
 yt-dlp
 requests
 urllib3
-browser-cookie3
 pycryptodomex
 lz4
 pydantic
