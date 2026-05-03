@@ -1,25 +1,14 @@
 """
-Vercel ASGI Handler for FastAPI Application
-This file exports the FastAPI app for Vercel's serverless environment
+Vercel ASGI Handler - Entry point for @vercel/python runtime
 """
-
 import sys
 from pathlib import Path
-import os
 
-# Set environment variable for serverless
-os.environ['VERCEL'] = '1'
-
-# Add parent directory to path to import main module
+# Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-try:
-    from main import app
-except Exception as e:
-    import logging
-    logging.error(f"Failed to import app from main: {e}", exc_info=True)
-    raise
+# Import and export the FastAPI app
+from main import app
 
-# Vercel looks for 'app' or 'handler' variable
-# For FastAPI/ASGI apps, exporting 'app' directly works
-__all__ = ['app']
+# That's it - Vercel's @vercel/python will use this 'app' as the ASGI application
+

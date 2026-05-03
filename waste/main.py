@@ -111,34 +111,38 @@ USER_VPN_CONFIG = {
 
 def build_vpn_proxy_url():
     """Build proxy URL from VPN credentials"""
-    if not USER_VPN_CONFIG["enabled"] or not USER_VPN_CONFIG["username"]:
-        return None
-    
-    vpn_type = USER_VPN_CONFIG.get("vpn_type", "").lower()
-    username = USER_VPN_CONFIG.get("username", "")
-    password = USER_VPN_CONFIG.get("password", "")
-    server = USER_VPN_CONFIG.get("vpn_server", "")
-    port = USER_VPN_CONFIG.get("port", 443)
-    
-    # For SSTP, create HTTP proxy URL with auth
-    if vpn_type == "sstp":
+    try:
+        if not USER_VPN_CONFIG["enabled"] or not USER_VPN_CONFIG["username"]:
+            return None
+        
+        vpn_type = USER_VPN_CONFIG.get("vpn_type", "").lower()
+        username = USER_VPN_CONFIG.get("username", "")
+        password = USER_VPN_CONFIG.get("password", "")
+        server = USER_VPN_CONFIG.get("vpn_server", "")
+        port = USER_VPN_CONFIG.get("port", 443)
+        
+        # For SSTP, create HTTP proxy URL with auth
+        if vpn_type == "sstp":
+            proxy_url = f"http://{username}:{password}@{server}:{port}"
+            logger.info(f"✓ SSTP VPN Proxy configured: {server}:{port}")
+            return proxy_url
+        
+        # For other types, try similar format
         proxy_url = f"http://{username}:{password}@{server}:{port}"
-        logger.info(f"✓ SSTP VPN Proxy configured: {server}:{port}")
+        logger.info(f"✓ VPN Proxy configured: {proxy_url}")
         return proxy_url
-    
-    # For other types, try similar format
-    proxy_url = f"http://{username}:{password}@{server}:{port}"
-    logger.info(f"✓ VPN Proxy configured: {proxy_url}")
-    return proxy_url
+    except Exception as e:
+        logger.warning(f"Failed to build VPN proxy URL: {e}")
+        return None
 
-# Initialize VPN proxy
-USER_VPN_CONFIG["proxy_url"] = build_vpn_proxy_url()
+# Initialize VPN proxy (with error handling)
+try:
+    USER_VPN_CONFIG["proxy_url"] = build_vpn_proxy_url()
+except Exception as e:
+    logger.warning(f"Could not initialize VPN proxy: {e}")
+    USER_VPN_CONFIG["proxy_url"] = None
 
-# Startup event for debugging and initialization
-@app.on_event("startup")
-async def startup_event():
-    logger.info("✓ Application started successfully")
-    logger.info(f"VPN enabled: {USER_VPN_CONFIG.get('enabled', False)}")
+logger.info(f"App initialized. VPN enabled: {USER_VPN_CONFIG.get('enabled', False)}")
 
 # ============================================
 # ========== TOKEN SYSTEM (Unlimited) ==========
